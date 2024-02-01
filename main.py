@@ -223,3 +223,5 @@ def target_summary_with_num(dataframe, target, numerical_col):
 
 for col in num_cols:
     target_summary_with_num(train, "NObeyesdad", col)
+
+# deneme 
