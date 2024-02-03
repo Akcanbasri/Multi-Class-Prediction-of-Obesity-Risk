@@ -17,7 +17,15 @@ from sklearn.preprocessing import (
     StandardScaler,
     RobustScaler,
 )
+from lightgbm import LGBMClassifier
+from sklearn.model_selection import (
+    GridSearchCV,
+    RandomizedSearchCV,
+    validation_curve,
+    cross_validate,
+)
 
+pd.set_option("display.max_colwidth", None)  # Increase the width of the output
 pd.set_option("display.max_columns", None)
 pd.set_option("display.max_rows", None)
 pd.set_option("display.float_format", lambda x: "%.3f" % x)
@@ -56,9 +64,6 @@ Targets:
 train = pd.read_csv("./data/train.csv")
 test = pd.read_csv("./data/test.csv")
 sample_submission = pd.read_csv("./data/sample_submission.csv")
-
-train["NObeyesdad"].value_counts()
-train["NObeyesdad_encoded"].value_counts()
 
 #############################################
 # Exploratory Data Analysis
@@ -203,27 +208,20 @@ def num_summary(dataframe, num_cols, plot=False):
         plt.show(block=True)
 
 
-import matplotlib.pyplot as plt
-
-pd.set_option("display.max_colwidth", None)  # Increase the width of the output
-
 for col in num_cols:
     # wrrite the variable name
     print(f"########################### {col} ###########################")
     num_summary(train, col, plot=True)
 
-
 train.head()
+
+# label encoding for NObeyesdad column for visualization
+label_encoder = LabelEncoder()
+train["NObeyesdad_encoded"] = label_encoder.fit_transform(train["NObeyesdad"])
 
 
 # target variable analysis for categorical variables
 def target_summary_with_cat(dataframe, target, categorical_col, graph=False):
-    # label encoding for NObeyesdad column for visualization
-    label_encoder = LabelEncoder()
-    dataframe["NObeyesdad_encoded"] = label_encoder.fit_transform(
-        dataframe["NObeyesdad"]
-    )
-
     # show percentage(?/100) of target variable for categorical variables
     print(
         dataframe.groupby(categorical_col)
@@ -306,8 +304,6 @@ def high_correlated_cols(dataframe, plot=False, corr_th=0.90):
     return high_corr_list
 
 
-train.shape
-
 high_corr_list = high_correlated_cols(train, plot=True, corr_th=0.90)
 
 # drop highly correlated columns
@@ -349,6 +345,11 @@ num_cols = [col for col in num_cols if "id" not in col]
 
 train.head()
 
+# check the outliers before replacing
+for col in num_cols:
+    print(f"##################### {col} #####################")
+    print(check_outlier(train, col, q1=0.1, q3=0.9))
+
 
 # grab_outliers function for grabbing the outliers
 def grab_outliers(dataframe, col_name, index=False):
@@ -387,7 +388,386 @@ def replace_with_thresholds(dataframe, variable):
     dataframe.loc[(dataframe[variable] > up_limit), variable] = up_limit
 
 
-# outlier analysis for numerical variables
+# replace the outliers with the limits
+for col in num_cols:
+    if col != "NObeyesdad_encoded":
+        replace_with_thresholds(train, col)
+
+# check the outliers again after replacing
 for col in num_cols:
     print(f"##################### {col} #####################")
-    print(col, check_outlier(train, col, q1=0.05, q3=0.95))
+    print(check_outlier(train, col, q1=0.1, q3=0.9))
+
+
+#############################################
+# Missing Values
+#############################################
+
+# missing values
+train.isnull().sum()
+
+# test missing values
+test.isnull().sum()
+
+# we don't have any missing values in the train and test data
+train.head()
+
+
+cat_cols, num_cols, cat_but_car = grab_col_names(train)
+
+
+#############################################
+# Feature Extraction
+#############################################
+def feature_extraction(df):
+
+    #############################################
+    # Age to Gender Group
+    # 0-17: young & male = youngmale
+    df.loc[(df["Age"] < 18) & (df["Gender"] == "Male"), "NEW_GENDER_AGE_GROUP"] = (
+        "youngmale"
+    )
+
+    # 18-50: adult & male = maturemale
+    df.loc[
+        (df["Gender"] == "Male") & (df["Age"] >= 18) & (df["Age"] <= 50),
+        "NEW_GENDER_AGE_GROUP",
+    ] = "maturemale"
+
+    # 50+: senior & male = seniormale
+    df.loc[(df["Gender"] == "Male") & (df["Age"] > 50), "NEW_GENDER_AGE_GROUP"] = (
+        "seniormale"
+    )
+
+    # 0-17: young & femail = youngfemale
+    df.loc[(df["Age"] < 18) & (df["Gender"] == "Female"), "NEW_GENDER_AGE_GROUP"] = (
+        "youngfemale"
+    )
+
+    # 18-50: adult & femail = maturefemale
+    df.loc[
+        (df["Gender"] == "Female") & (df["Age"] >= 18) & (df["Age"] <= 50),
+        "NEW_GENDER_AGE_GROUP",
+    ] = "maturefemale"
+
+    # 50+: senior & femail = seniorfemale
+    df.loc[(df["Gender"] == "Female") & (df["Age"] > 50), "NEW_GENDER_AGE_GROUP"] = (
+        "seniorfemale"
+    )
+
+    #############################################
+    # Weight to Gender Group
+    # 0-50: light & Male = lightmale
+    df.loc[(df["Weight"] < 50) & (df["Gender"] == "Male"), "NEW_GEBDER_WEIGHT"] = (
+        "lightmale"
+    )
+
+    # 50-90 : normal & male = normalmale
+    df.loc[
+        (df["Gender"] == "Male") & (df["Weight"] >= 50) & (df["Weight"] <= 90),
+        "NEW_GEBDER_WEIGHT",
+    ] = "normalmale"
+
+    # 90+: heavy & male = heavymale
+    df.loc[(df["Gender"] == "Male") & (df["Weight"] > 90), "NEW_GEBDER_WEIGHT"] = (
+        "heavymale"
+    )
+
+    # 0-50: light & Female = lightfemale
+    df.loc[(df["Weight"] < 50) & (df["Gender"] == "Female"), "NEW_GEBDER_WEIGHT"] = (
+        "lightfemale"
+    )
+
+    # 50-90 : normal & female = normalfemale
+    df.loc[
+        (df["Gender"] == "Female") & (df["Weight"] >= 50) & (df["Weight"] <= 90),
+        "NEW_GEBDER_WEIGHT",
+    ] = "normalfemale"
+
+    # 90+: heavy & female = heavyfemale
+    df.loc[(df["Gender"] == "Female") & (df["Weight"] > 90), "NEW_GEBDER_WEIGHT"] = (
+        "heavyfemale"
+    )
+
+    df.head()
+
+    #############################################
+    # family_history_with_overweight and Gender Group
+    # family_history_with_overweight = yes & Gender == Male = yesmale
+    df.loc[
+        (df["family_history_with_overweight"] == "yes") & (df["Gender"] == "Male"),
+        "NEW_FAMILY_HISTORY_WITH_Gender",
+    ] = "yesfammilymale"
+
+    # family_history_with_overweight = yes & Gender == Female = yesfemale
+    df.loc[
+        (df["family_history_with_overweight"] == "yes") & (df["Gender"] == "Female"),
+        "NEW_FAMILY_HISTORY_WITH_Gender",
+    ] = "yesfammilyfemale"
+
+    # family_history_with_overweight = no & Gender == Male = nomale
+    df.loc[
+        (df["family_history_with_overweight"] == "no") & (df["Gender"] == "Male"),
+        "NEW_FAMILY_HISTORY_WITH_Gender",
+    ] = "nofammilymale"
+
+    # family_history_with_overweight = no & Gender == Female = nofemale
+    df.loc[
+        (df["family_history_with_overweight"] == "no") & (df["Gender"] == "Female"),
+        "NEW_FAMILY_HISTORY_WITH_Gender",
+    ] = "nofammilyfemale"
+
+    #############################################
+    # FAVC and Weight interaction
+    # FAVC = yes & Weight < 50 = yeslight
+    df.loc[(df["FAVC"] == "yes") & (df["Weight"] < 50), "NEW_FAVC_WEIGHT"] = (
+        "yescalorilight"
+    )
+
+    # FAVC = yes & Weight >= 50 & Weight <= 90 = yesnormal
+    df.loc[
+        (df["FAVC"] == "yes") & (df["Weight"] >= 50) & (df["Weight"] <= 90),
+        "NEW_FAVC_WEIGHT",
+    ] = "yescalorinormal"
+
+    # FAVC = yes & Weight > 90 = yesheavy
+    df.loc[(df["FAVC"] == "yes") & (df["Weight"] > 90), "NEW_FAVC_WEIGHT"] = (
+        "yescaloriheavy"
+    )
+
+    # FAVC = no & Weight < 50 = nolight
+    df.loc[(df["FAVC"] == "no") & (df["Weight"] < 50), "NEW_FAVC_WEIGHT"] = (
+        "nocalorilight"
+    )
+
+    # FAVC = no & Weight >= 50 & Weight <= 90 = nonormal
+    df.loc[
+        (df["FAVC"] == "no") & (df["Weight"] >= 50) & (df["Weight"] <= 90),
+        "NEW_FAVC_WEIGHT",
+    ] = "nocalorinormal"
+
+    # FAVC = no & Weight > 90 = noheavy
+    df.loc[(df["FAVC"] == "no") & (df["Weight"] > 90), "NEW_FAVC_WEIGHT"] = (
+        "nocaloriheavy"
+    )
+
+    #############################################
+    # FAVC and Age interaction
+    # FAVC = yes & Age < 18 = yesyoung
+    df.loc[(df["FAVC"] == "yes") & (df["Age"] < 18), "NEW_FAVC_AGE"] = "yescaloriyoung"
+
+    # FAVC = yes & Age >= 18 & Age <= 50 = yesmature
+    df.loc[
+        (df["FAVC"] == "yes") & (df["Age"] >= 18) & (df["Age"] <= 50),
+        "NEW_FAVC_AGE",
+    ] = "yescalorimature"
+
+    # FAVC = yes & Age > 50 = yessenior
+    df.loc[(df["FAVC"] == "yes") & (df["Age"] > 50), "NEW_FAVC_AGE"] = "yescalorisenior"
+
+    # FAVC = no & Age < 18 = noyoung
+    df.loc[(df["FAVC"] == "no") & (df["Age"] < 18), "NEW_FAVC_AGE"] = "nocaloriyoung"
+
+    # FAVC = no & Age >= 18 & Age <= 50 = nomature
+    df.loc[
+        (df["FAVC"] == "no") & (df["Age"] >= 18) & (df["Age"] <= 50),
+        "NEW_FAVC_AGE",
+    ] = "nocalorimature"
+
+    # FAVC = no & Age > 50 = nosenior
+    df.loc[(df["FAVC"] == "no") & (df["Age"] > 50), "NEW_FAVC_AGE"] = "nocalorisenior"
+
+    #############################################
+    # Smoking and Age interaction
+    # SC = yes & Age < 18 = scyoung
+    df.loc[(df["SCC"] == "yes") & (df["Age"] < 18), "NEW_SCC_AGE"] = "smokeyoung"
+
+    # SC = yes & Age >= 18 & Age <= 50 = scmature
+    df.loc[
+        (df["SCC"] == "yes") & (df["Age"] >= 18) & (df["Age"] <= 50),
+        "NEW_SCC_AGE",
+    ] = "smokemature"
+
+    # SC = yes & Age > 50 = scsenior
+    df.loc[(df["SCC"] == "yes") & (df["Age"] > 50), "NEW_SCC_AGE"] = "smokesenior"
+
+    # SC = no & Age < 18 = nocyoung
+    df.loc[(df["SCC"] == "no") & (df["Age"] < 18), "NEW_SCC_AGE"] = "nosokeyoung"
+
+    # SC = no & Age >= 18 & Age <= 50 = nocmature
+    df.loc[
+        (df["SCC"] == "no") & (df["Age"] >= 18) & (df["Age"] <= 50),
+        "NEW_SCC_AGE",
+    ] = "nosokemature"
+
+    # SC = no & Age > 50 = nocsenior
+    df.loc[(df["SCC"] == "no") & (df["Age"] > 50), "NEW_SCC_AGE"] = "nosokesenior"
+
+
+feature_extraction(df=train)
+
+
+cat_cols, num_cols, cat_but_car = grab_col_names(train)
+
+# drop unnecessary columns after feature extraction
+drop_list = ["id", "NObeyesdad"]
+
+train = train.drop(drop_list, axis=1)
+
+train.head()
+
+#############################################
+# Endoing (One Hot Encoding)
+############################################
+
+cat_cols, num_cols, cat_but_car = grab_col_names(train)
+
+
+def one_hot_encoder(dataframe, categorical_cols, drop_first=False):
+    dataframe = pd.get_dummies(
+        dataframe, columns=categorical_cols, drop_first=drop_first
+    )
+    return dataframe
+
+
+train = one_hot_encoder(train, cat_cols, drop_first=True)
+
+train.head()
+
+cat_cols, num_cols, cat_but_car = grab_col_names(train)
+
+# uppercase for column names
+train.columns = [col.upper() for col in train.columns]
+
+train.head()
+
+#############################################
+# Modelling (LightGBM)
+#############################################
+
+X = train.drop("NOBEYESDAD_ENCODED", axis=1)
+y = train["NOBEYESDAD_ENCODED"]
+
+lgbm_model = LGBMClassifier(random_state=17)
+lgbm_model.get_params()
+
+
+cv_results = cross_validate(
+    lgbm_model,
+    X,
+    y,
+    cv=10,
+    scoring=["accuracy", "recall_macro", "roc_auc_ovr", "f1_micro"],
+    n_jobs=-1,
+)
+
+cv_results = pd.DataFrame(cv_results)
+cv_results
+
+# grid search for hyperparameter tuning
+# lgbm best parameters range for grid search
+lgbm_params = {
+    "n_estimators": [100, 200, 500, 1000],
+    "subsample": [0.6, 0.8, 1.0],
+    "max_depth": [3, 4, 5, 6],
+    "learning_rate": [0.1, 0.01, 0.02, 0.05],
+    "min_child_samples": [5, 10, 20],
+}
+
+# grid search for hyperparameter tuning
+lgbm_best_grid = GridSearchCV(lgbm_model, lgbm_params, cv=10, n_jobs=-1, verbose=2).fit(
+    X, y
+)
+
+# best parameters for lgbm
+lgbm_final = lgbm_model.set_params(**lgbm_best_grid.best_params_, random_state=17).fit(
+    X, y
+)
+
+cv_results = cross_validate(
+    lgbm_final,
+    X,
+    y,
+    cv=10,
+    scoring=["accuracy", "recall_macro", "roc_auc_ovr", "f1_micro"],
+    n_jobs=-1,
+)
+
+
+cv_results = pd.DataFrame(cv_results)
+cv_results
+
+cv_results["test_accuracy"].mean()
+cv_results["test_recall_macro"].mean()
+cv_results["test_roc_auc_ovr"].mean()
+cv_results["test_f1_micro"].mean()
+
+
+#############################################
+# Plot importance
+#############################################
+
+
+def plot_importance(model, features, num=len(X), save=False):
+    feature_imp = pd.DataFrame(
+        {"Value": model.feature_importances_, "Feature": features.columns}
+    )
+    plt.figure(figsize=(10, 10))
+    sns.set(font_scale=1)
+    sns.barplot(
+        x="Value",
+        y="Feature",
+        data=feature_imp.sort_values(by="Value", ascending=False)[0:num],
+    )
+    plt.title("Features")
+    plt.tight_layout()
+    plt.show()
+    if save:
+        plt.savefig("importances.png")
+
+
+plot_importance(lgbm_final, X, num=20, save=False)
+
+
+#############################################
+# Validation Curve
+#############################################
+
+
+# val_curve_params function for validation curve
+def val_curve_params(model, X, y, param_name, param_range, scoring="roc_auc", cv=10):
+    train_score, test_score = validation_curve(
+        model,
+        X=X,
+        y=y,
+        param_name=param_name,
+        param_range=param_range,
+        scoring=scoring,
+        cv=cv,
+    )
+
+    mean_train_score = np.mean(train_score, axis=1)
+    mean_test_score = np.mean(test_score, axis=1)
+
+    plt.plot(param_range, mean_train_score, label="Training Score", color="b")
+
+    plt.plot(param_range, mean_test_score, label="Validation Score", color="g")
+
+    plt.title(f"Validation Curve for {type(model).__name__}")
+    plt.xlabel(f"Number of {param_name}")
+    plt.ylabel(f"{scoring}")
+    plt.tight_layout()
+    plt.legend(loc="best")
+    plt.show(block=True)
+
+
+# validation curve for n_estimators
+val_curve_params(
+    lgbm_final,
+    X,
+    y,
+    param_name="n_estimators",
+    param_range=[10, 50, 200, 500],
+    scoring="roc_auc_ovr",
+    cv=5,
+)
