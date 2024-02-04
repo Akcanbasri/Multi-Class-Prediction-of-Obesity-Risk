@@ -3,24 +3,13 @@ import pandas as pd
 import seaborn as sns
 from matplotlib import pyplot as plt
 
-import missingno as msno
-from datetime import date
-from sklearn.metrics import accuracy_score
-from sklearn.model_selection import train_test_split
-from sklearn.neighbors import LocalOutlierFactor
 import pandas as pd
 import seaborn as sns
 from sklearn.preprocessing import LabelEncoder
-from sklearn.preprocessing import (
-    MinMaxScaler,
-    LabelEncoder,
-    StandardScaler,
-    RobustScaler,
-)
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 from lightgbm import LGBMClassifier
 from sklearn.model_selection import (
     GridSearchCV,
-    RandomizedSearchCV,
     validation_curve,
     cross_validate,
 )
@@ -667,17 +656,15 @@ cv_results
 # grid search for hyperparameter tuning
 # lgbm best parameters range for grid search
 lgbm_params = {
-    "n_estimators": [100, 200, 500, 1000],
-    "subsample": [0.6, 0.8, 1.0],
-    "max_depth": [3, 4, 5, 6],
-    "learning_rate": [0.1, 0.01, 0.02, 0.05],
-    "min_child_samples": [5, 10, 20],
+    "learning_rate": [0.01, 0.1],
+    "n_estimators": [100, 300, 500, 1000],
+    "colsample_bytree": [0.5, 0.7, 1],
 }
 
 # grid search for hyperparameter tuning
-lgbm_best_grid = GridSearchCV(lgbm_model, lgbm_params, cv=10, n_jobs=-1, verbose=2).fit(
-    X, y
-)
+lgbm_best_grid = GridSearchCV(
+    lgbm_model, lgbm_params, cv=5, n_jobs=-1, verbose=True
+).fit(X, y)
 
 # best parameters for lgbm
 lgbm_final = lgbm_model.set_params(**lgbm_best_grid.best_params_, random_state=17).fit(
@@ -702,6 +689,45 @@ cv_results["test_recall_macro"].mean()
 cv_results["test_roc_auc_ovr"].mean()
 cv_results["test_f1_micro"].mean()
 
+# Prediction
+y_pred = lgbm_final.predict(X)
+train_org = pd.read_csv("./data/train.csv")
+
+y_pred = pd.concat(
+    [train_org["id"], pd.DataFrame(y_pred, columns=["prediction"])], axis=1
+)
+y_pred.head()
+
+# convert the prediction to the original label
+# if the prediction is 0, it means Insufficient_Weight
+# if the prediction is 1, it means Normal_Weight
+# if the prediction is 2, it means Obesity_Type_I
+# if the prediction is 3, it means Obesity_Type_II
+# if the prediction is 4, it means Obesity_Type_III
+# if the prediction is 5, it means Overweight_Level_I
+# if the prediction is 6, it means Overweight_Level_II
+
+# make y_pred dataframe
+
+
+
+
+y_pred["prediction"] = y_pred["prediction"].map(
+    {
+        0: "Insufficient_Weight",
+        1: "Normal_Weight",
+        2: "Obesity_Type_I",
+        3: "Obesity_Type_II",
+        4: "Obesity_Type_III",
+        5: "Overweight_Level_I",
+        6: "Overweight_Level_II",
+    }
+)
+
+y_pred.head()
+
+# save the data 
+y_pred.to_csv("submission.csv", index=False)
 
 #############################################
 # Plot importance
